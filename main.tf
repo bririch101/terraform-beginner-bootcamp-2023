@@ -1,2 +1,21 @@
+terraform {
+  backend "remote" {
+    organization = "Brian-TF-Gitpod"
 
-This is a new comment entered on Saturday
+    workspaces {
+      name = "Brian-TF-Git-space"
+    }
+  }
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+}
+
