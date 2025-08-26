@@ -1,12 +1,15 @@
+############################
+# Terraform & Provider
+############################
 terraform {
   backend "remote" {
     organization = "Brian-TF-Gitpod"
-
     workspaces {
       name = "Brian-TF-Git-space"
     }
   }
 
+  required_version = ">= 1.5.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -17,5 +20,331 @@ terraform {
 
 provider "aws" {
   region = "us-east-1"
+  # Credentials are sourced from environment variables in Gitpod:
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (already set by you)
 }
 
+############################
+# Variables & Locals
+############################
+variable "project_name" {
+  type    = string
+  default = "gitpod-vpc-demo"
+}
+
+# For quick testing you can leave this at 0.0.0.0/0 (NOT recommended for production).
+variable "allowed_ssh_cidr" {
+  type    = string
+  default = "0.0.0.0/0"
+}
+
+# Optionally provide a key pair name if you want SSH access to public instances
+variable "key_name" {
+  type      = string
+  default   = null
+  nullable  = true
+  description = "Existing EC2 key pair name (optional)"
+}
+
+# Toggle instance creation if you want fewer instances
+locals {
+  enable_public_instances  = true
+  enable_private_instances = true
+}
+
+############################
+# AZs
+############################
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# Pick first two AZs in us-east-1
+locals {
+  azs = slice(data.aws_availability_zones.available.names, 0, 2)
+}
+
+############################
+# VPC & Subnets
+############################
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name        = "${var.project_name}-vpc"
+    Project     = var.project_name
+    Environment = "dev"
+  }
+}
+
+# Public subnets (two, one per AZ)
+resource "aws_subnet" "public" {
+  count                   = 2
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(aws_vpc.main.cidr_block, 4, count.index)            # 10.0.0.0/20, 10.0.16.0/20
+  availability_zone       = local.azs[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name        = "${var.project_name}-public-${local.azs[count.index]}"
+    Tier        = "public"
+    Project     = var.project_name
+    Environment = "dev"
+  }
+}
+
+# Private subnets (two, one per AZ)
+resource "aws_subnet" "private" {
+  count             = 2
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 4, 8 + count.index)              # 10.0.128.0/20, 10.0.144.0/20
+  availability_zone = local.azs[count.index]
+
+  tags = {
+    Name        = "${var.project_name}-private-${local.azs[count.index]}"
+    Tier        = "private"
+    Project     = var.project_name
+    Environment = "dev"
+  }
+}
+
+############################
+# Internet Gateway & Public Routing
+############################
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name    = "${var.project_name}-igw"
+    Project = var.project_name
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name    = "${var.project_name}-public-rt"
+    Tier    = "public"
+    Project = var.project_name
+  }
+}
+
+resource "aws_route" "public_inet" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.igw.id
+}
+
+resource "aws_route_table_association" "public_assoc" {
+  count          = length(aws_subnet.public)
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+############################
+# NAT Gateways & Private Routing
+############################
+# One EIP+NAT per AZ (highly available)
+resource "aws_eip" "nat" {
+  count      = 2
+  domain     = "vpc"
+  depends_on = [aws_internet_gateway.igw]
+
+  tags = {
+    Name    = "${var.project_name}-nat-eip-${local.azs[count.index]}"
+    Project = var.project_name
+  }
+}
+
+resource "aws_nat_gateway" "ngw" {
+  count         = 2
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
+  tags = {
+    Name    = "${var.project_name}-ngw-${local.azs[count.index]}"
+    Project = var.project_name
+  }
+  depends_on = [aws_internet_gateway.igw]
+}
+
+# Private route tables — one per AZ, each pointing to that AZ's NAT
+resource "aws_route_table" "private" {
+  count = 2
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name    = "${var.project_name}-private-rt-${local.azs[count.index]}"
+    Tier    = "private"
+    Project = var.project_name
+  }
+}
+
+resource "aws_route" "private_nat" {
+  count                  = 2
+  route_table_id         = aws_route_table.private[count.index].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.ngw[count.index].id
+}
+
+resource "aws_route_table_association" "private_assoc" {
+  count          = length(aws_subnet.private)
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[count.index].id
+}
+
+############################
+# Security Groups
+############################
+# For public instances: allow SSH from allowed CIDR; all egress open.
+resource "aws_security_group" "public_sg" {
+  name        = "${var.project_name}-public-sg"
+  description = "Allow SSH to public instances"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_ssh_cidr]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name    = "${var.project_name}-public-sg"
+    Project = var.project_name
+  }
+}
+
+# For private instances: no inbound (use SSM), all egress open.
+resource "aws_security_group" "private_sg" {
+  name        = "${var.project_name}-private-sg"
+  description = "No inbound; egress only (SSM via NAT)"
+  vpc_id      = aws_vpc.main.id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name    = "${var.project_name}-private-sg"
+    Project = var.project_name
+  }
+}
+
+############################
+# AMI (Amazon Linux 2 / AL2023)
+############################
+# Latest Amazon Linux 2 (stable choice). You can switch owners/name if you prefer AL2023.
+data "aws_ami" "amazon_linux2" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+}
+
+############################
+# SSM Role for Private Instances
+############################
+data "aws_iam_policy" "ssm_core" {
+  arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_role" "ssm_role" {
+  name = "${var.project_name}-ssm-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = { Service = "ec2.amazonaws.com" },
+      Action   = "sts:AssumeRole"
+    }]
+  })
+  tags = { Project = var.project_name }
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_attach" {
+  role       = aws_iam_role.ssm_role.name
+  policy_arn = data.aws_iam_policy.ssm_core.arn
+}
+
+resource "aws_iam_instance_profile" "ssm_profile" {
+  name = "${var.project_name}-ssm-profile"
+  role = aws_iam_role.ssm_role.name
+}
+
+############################
+# EC2 Instances
+############################
+# Public instances — one in each public subnet (public IPs)
+resource "aws_instance" "public" {
+  count                       = local.enable_public_instances ? length(aws_subnet.public) : 0
+  ami                         = data.aws_ami.amazon_linux2.id
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.public[count.index].id
+  vpc_security_group_ids      = [aws_security_group.public_sg.id]
+  associate_public_ip_address = true
+  key_name                    = var.key_name
+
+  tags = {
+    Name        = "${var.project_name}-public-${count.index}"
+    Tier        = "public"
+    Project     = var.project_name
+    Environment = "dev"
+  }
+}
+
+# Private instances — one in each private subnet (no public IP; SSM-enabled)
+resource "aws_instance" "private" {
+  count                  = local.enable_private_instances ? length(aws_subnet.private) : 0
+  ami                    = data.aws_ami.amazon_linux2.id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.private[count.index].id
+  vpc_security_group_ids = [aws_security_group.private_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
+
+  # No public IP; reachable via SSM Session Manager (requires NAT egress to reach SSM endpoints).
+  associate_public_ip_address = false
+
+  tags = {
+    Name        = "${var.project_name}-private-${count.index}"
+    Tier        = "private"
+    Project     = var.project_name
+    Environment = "dev"
+  }
+}
+
+############################
+# Outputs
+############################
+output "vpc_id" {
+  value = aws_vpc.main.id
+}
+
+output "public_subnet_ids" {
+  value = [for s in aws_subnet.public : s.id]
+}
+
+output "private_subnet_ids" {
+  value = [for s in aws_subnet.private : s.id]
+}
+
+output "public_instance_ids" {
+  value = [for i in aws_instance.public : i.id]
+}
+
+output "private_instance_ids" {
+  value = [for i in aws_instance.private : i.id]
+}
