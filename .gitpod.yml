@@ -1,19 +1,33 @@
+# .gitpod.yml
 tasks:
-  - name: terraform
-    init: |
-      sudo apt-get update && sudo apt-get install -y gnupg software-properties-common curl
-      curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-      sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-      sudo apt-get update && sudo apt-get install terraform
-  - name: aws-cli
+  - name: toolchain (terraform + aws-cli)
     env:
       AWS_CLI_AUTO_PROMPT: on-partial
     init: |
-      cd /workspace
-      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-      unzip awscliv2.zip
-      sudo ./aws/install
-      cd $THEIA_WORKSPACE_ROOT
+      set -euo pipefail
+      sudo apt-get update
+      sudo apt-get install -y gnupg curl lsb-release unzip
+
+      # Terraform repo (keyring, no apt-key)
+      curl -fsSL https://apt.releases.hashicorp.com/gpg \
+        | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+      echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+        | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null
+      sudo apt-get update
+      sudo apt-get install -y terraform
+
+      # AWS CLI v2
+      cd /tmp
+      curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip -q awscliv2.zip
+      sudo ./aws/install --update
+    command: |
+      # Runs each time the IDE starts
+      terraform -version || true
+      aws --version || true
+      echo "Repo root: ${GITPOD_REPO_ROOT:-$PWD}"
+      echo "Ready. Try: terraform init (if main.tf exists)."
+
 vscode:
   extensions:
     - amazonwebservices.aws-toolkit-vscode
