@@ -240,20 +240,20 @@ resource "aws_security_group" "private_sg" {
     Project = var.project_name
   }
 }
-
 ############################
-# AMI (Amazon Linux 2 / AL2023)
+# AMI (Ubuntu 22.04 LTS)
 ############################
-# Latest Amazon Linux 2 (stable choice). You can switch owners/name if you prefer AL2023.
-data "aws_ami" "amazon_linux2" {
+data "aws_ami" "ubuntu_2204" {
   most_recent = true
-  owners      = ["amazon"]
+  owners      = ["099720109477"] # Canonical
 
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
   }
 }
+
+
 
 ############################
 # SSM Role for Private Instances
@@ -285,13 +285,10 @@ resource "aws_iam_instance_profile" "ssm_profile" {
   role = aws_iam_role.ssm_role.name
 }
 
-############################
-# EC2 Instances
-############################
-# Public instances — one in each public subnet (public IPs)
+# Public instances — one in each public subnet
 resource "aws_instance" "public" {
   count                       = local.enable_public_instances ? length(aws_subnet.public) : 0
-  ami                         = data.aws_ami.amazon_linux2.id
+  ami                         = data.aws_ami.ubuntu_2204.id   # << Updated
   instance_type               = "t3.micro"
   subnet_id                   = aws_subnet.public[count.index].id
   vpc_security_group_ids      = [aws_security_group.public_sg.id]
@@ -306,16 +303,14 @@ resource "aws_instance" "public" {
   }
 }
 
-# Private instances — one in each private subnet (no public IP; SSM-enabled)
+# Private instances — one in each private subnet
 resource "aws_instance" "private" {
   count                  = local.enable_private_instances ? length(aws_subnet.private) : 0
-  ami                    = data.aws_ami.amazon_linux2.id
+  ami                    = data.aws_ami.ubuntu_2204.id   # << Updated
   instance_type          = "t3.micro"
   subnet_id              = aws_subnet.private[count.index].id
   vpc_security_group_ids = [aws_security_group.private_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
-
-  # No public IP; reachable via SSM Session Manager (requires NAT egress to reach SSM endpoints).
   associate_public_ip_address = false
 
   tags = {
