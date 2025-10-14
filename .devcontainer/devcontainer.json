@@ -3,13 +3,24 @@
 //
 // See https://aka.ms/devcontainer.json for more information.
 {
-	"name": "Ona",
-	// Use "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
-	// instead of the build to use a pre-built image.
+	"name": "Terraform + AWS CLI",
 	"build": {
         "context": ".",
         "dockerfile": "Dockerfile"
-    }
+    },
+	// Configure environment startup commands
+	"postStartCommand": "bash -c 'echo \"Terraform: $(terraform version | head -n1)\" && echo \"AWS CLI: $(aws --version)\" && [ -n \"${AWS_DEFAULT_REGION:-}\" ] && aws configure set default.region \"$AWS_DEFAULT_REGION\" || true && [ -n \"${AWS_ACCESS_KEY_ID:-}\" ] && aws sts get-caller-identity || true'",
+	// VS Code extensions
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"hashicorp.terraform",
+				"amazonwebservices.aws-toolkit-vscode",
+				"redhat.vscode-yaml",
+				"eamodio.gitlens"
+			]
+		}
+	}
 	// Features add additional features to your environment. See https://containers.dev/features
 	// Beware: features are not supported on all platforms and may have unintended side-effects.
 	// "features": {
