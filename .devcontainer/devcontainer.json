@@ -20,6 +20,12 @@
 				"eamodio.gitlens"
 			]
 		}
+	},
+	// Gitpod-specific configuration to disable auto-deletion
+	"gitpod": {
+		"timeout": {
+			"disconnected": "0s"
+		}
 	}
 	// Features add additional features to your environment. See https://containers.dev/features
 	// Beware: features are not supported on all platforms and may have unintended side-effects.
