@@ -11,11 +11,22 @@ terraform {
 
   required_version = ">= 1.5.0"
   required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
+  aws = {
+    source  = "hashicorp/aws"
+    version = "~> 5.0"
   }
+  tls = {
+    source  = "hashicorp/tls"
+    version = "~> 4.0"
+  }
+
+  local = {
+    source  = "hashicorp/local"
+    version = "~> 2.5"
+  }
+
+  }
+
 }
 
 provider "aws" {
@@ -35,7 +46,7 @@ variable "project_name" {
 # For quick testing you can leave this at 0.0.0.0/0 (NOT recommended for production).
 variable "allowed_ssh_cidr" {
   type    = string
-  default = "0.0.0.0/0"
+  default = "96.224.240.155/32"
 }
 
 # Optionally provide a key pair name if you want SSH access to public instances
@@ -286,6 +297,20 @@ resource "aws_iam_instance_profile" "ssm_profile" {
 }
 
 # Public instances — one in each public subnet
+
+# -------------------------------------------------
+# SSH key pair (generated locally & uploaded to AWS)
+# -------------------------------------------------
+resource "tls_private_key" "generated" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "public_instances" {
+  key_name   = "${var.project_name}-public-ssh"
+  public_key = tls_private_key.generated.public_key_openssh
+}
+
 resource "aws_instance" "public" {
   count                       = local.enable_public_instances ? length(aws_subnet.public) : 0
   ami                         = data.aws_ami.ubuntu_2204.id   # << Updated
@@ -293,7 +318,7 @@ resource "aws_instance" "public" {
   subnet_id                   = aws_subnet.public[count.index].id
   vpc_security_group_ids      = [aws_security_group.public_sg.id]
   associate_public_ip_address = true
-  key_name                    = var.key_name
+  key_name                    = aws_key_pair.public_instances.key_name
 
   tags = {
     Name        = "${var.project_name}-public-${count.index}"
@@ -343,10 +368,32 @@ output "public_instance_ids" {
 output "private_instance_ids" {
   value = [for i in aws_instance.private : i.id]
 }
+
+
 # Public instance public IP addresses
 output "public_instance_public_ips" {
   value = [for i in aws_instance.public : i.public_ip]
 }
 
+# Name of the generated SSH key pair
+output "ssh_key_pair_name" {
+  value = aws_key_pair.public_instances.key_name
+}
 
+
+# -------------------------------------------------
+# Optional: Save generated private key locally
+# -------------------------------------------------
+resource "local_file" "ssh_private_key" {
+  content              = tls_private_key.generated.private_key_pem
+  filename             = "${path.module}/keys/public_instances_private_key.pem"
+  file_permission      = "0600"
+  directory_permission = "0700"
+}
+
+# Output location of saved key file
+output "ssh_private_key_file" {
+  value       = local_file.ssh_private_key.filename
+  description = "Path to the locally saved PEM file for SSH access"
+}
 
