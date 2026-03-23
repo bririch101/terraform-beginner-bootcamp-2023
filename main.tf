@@ -15,6 +15,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
@@ -38,12 +42,17 @@ variable "allowed_ssh_cidr" {
   default = "0.0.0.0/0"
 }
 
-# Optionally provide a key pair name if you want SSH access to public instances
-variable "key_name" {
-  type      = string
-  default   = null
-  nullable  = true
-  description = "Existing EC2 key pair name (optional)"
+############################
+# TLS Key Pair
+############################
+resource "tls_private_key" "ssh" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "generated" {
+  key_name   = "${var.project_name}-key"
+  public_key = tls_private_key.ssh.public_key_openssh
 }
 
 # Toggle instance creation if you want fewer instances
@@ -293,7 +302,7 @@ resource "aws_instance" "public" {
   subnet_id                   = aws_subnet.public[count.index].id
   vpc_security_group_ids      = [aws_security_group.public_sg.id]
   associate_public_ip_address = true
-  key_name                    = var.key_name
+  key_name                    = aws_key_pair.generated.key_name
 
   tags = {
     Name        = "${var.project_name}-public-${count.index}"
@@ -346,6 +355,12 @@ output "private_instance_ids" {
 # Public instance public IP addresses
 output "public_instance_public_ips" {
   value = [for i in aws_instance.public : i.public_ip]
+}
+
+# Private key for SSH access to public instances — treat as a secret
+output "private_key_pem" {
+  value     = tls_private_key.ssh.private_key_pem
+  sensitive = true
 }
 
 
