@@ -30,12 +30,12 @@ resource "aws_ec2_transit_gateway" "use1" {
   }
 }
 
-# Attach us-east-1 VPC (all subnets) to the TGW
+# Attach us-east-1 VPC — one subnet per AZ (private subnets used; one per AZ is sufficient)
 resource "aws_ec2_transit_gateway_vpc_attachment" "use1" {
   provider           = aws.use1
   transit_gateway_id = aws_ec2_transit_gateway.use1.id
   vpc_id             = aws_vpc.use1.id
-  subnet_ids         = concat(aws_subnet.use1_public[*].id, aws_subnet.use1_private[*].id)
+  subnet_ids         = aws_subnet.use1_private[*].id
 
   tags = {
     Name    = "${var.project_name}-tgw-attach-use1"
@@ -60,12 +60,12 @@ resource "aws_ec2_transit_gateway" "usw1" {
   }
 }
 
-# Attach us-west-1 VPC (all subnets) to the TGW
+# Attach us-west-1 VPC — one subnet per AZ (private subnets used; one per AZ is sufficient)
 resource "aws_ec2_transit_gateway_vpc_attachment" "usw1" {
   provider           = aws.usw1
   transit_gateway_id = aws_ec2_transit_gateway.usw1.id
   vpc_id             = aws_vpc.usw1.id
-  subnet_ids         = concat(aws_subnet.usw1_public[*].id, aws_subnet.usw1_private[*].id)
+  subnet_ids         = aws_subnet.usw1_private[*].id
 
   tags = {
     Name    = "${var.project_name}-tgw-attach-usw1"
@@ -105,11 +105,13 @@ resource "aws_ec2_transit_gateway_peering_attachment_accepter" "usw1_accept" {
 ############################
 
 # us-east-1 TGW default route table: send 10.1.0.0/16 (usw1) via peering
+# depends_on ensures the peering is fully accepted (available) before the route is created
 resource "aws_ec2_transit_gateway_route" "use1_to_usw1" {
   provider                       = aws.use1
   transit_gateway_route_table_id = aws_ec2_transit_gateway.use1.association_default_route_table_id
   destination_cidr_block         = "10.1.0.0/16"
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_peering_attachment.use1_to_usw1.id
+  depends_on                     = [aws_ec2_transit_gateway_peering_attachment_accepter.usw1_accept]
 }
 
 # us-west-1 TGW default route table: send 10.0.0.0/16 (use1) via peering
@@ -118,6 +120,7 @@ resource "aws_ec2_transit_gateway_route" "usw1_to_use1" {
   transit_gateway_route_table_id = aws_ec2_transit_gateway.usw1.association_default_route_table_id
   destination_cidr_block         = "10.0.0.0/16"
   transit_gateway_attachment_id  = aws_ec2_transit_gateway_peering_attachment_accepter.usw1_accept.id
+  depends_on                     = [aws_ec2_transit_gateway_peering_attachment_accepter.usw1_accept]
 }
 
 ############################
