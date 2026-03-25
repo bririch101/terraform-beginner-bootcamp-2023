@@ -1,0 +1,16 @@
+tasks:
+  configureGit:
+    name: Configure GitHub credentials
+    description: Configures git to use the GITHUB_TOKEN secret for authenticated push/pull on every environment start.
+    command: |
+      if [ -z "${GITHUB_TOKEN:-}" ]; then
+        echo "GITHUB_TOKEN secret not set — skipping git credential setup."
+        echo "Add it at: app.ona.com → User Settings → Secrets"
+        exit 0
+      fi
+      git config --global credential.helper store
+      echo "https://bririch101:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
+      chmod 600 ~/.git-credentials
+      echo "GitHub credentials configured."
+    triggeredBy:
+      - postDevcontainerStart
