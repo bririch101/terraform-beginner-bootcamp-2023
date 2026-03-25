@@ -21,6 +21,5 @@ locals {
     apt-get upgrade -y
     apt-get install -y unattended-upgrades
     dpkg-reconfigure --priority=low unattended-upgrades
-    apt-get install -y ubuntu-desktop
   EOF
 }

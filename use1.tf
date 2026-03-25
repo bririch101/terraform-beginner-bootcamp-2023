@@ -140,7 +140,7 @@ resource "aws_route_table_association" "use1_private" {
 resource "aws_security_group" "use1_public" {
   provider    = aws.use1
   name        = "${var.project_name}-public-sg-use1"
-  description = "SSH and RDP from allowed IP only"
+  description = "SSH from allowed IP only"
   vpc_id      = aws_vpc.use1.id
 
   ingress {
@@ -149,23 +149,6 @@ resource "aws_security_group" "use1_public" {
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [var.allowed_cidr]
-  }
-
-  ingress {
-    description = "RDP"
-    from_port   = 3389
-    to_port     = 3389
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_cidr]
-  }
-
-  # ALB health checks — allow HTTP from within the VPC
-  ingress {
-    description = "HTTP from ALB"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [aws_vpc.use1.cidr_block]
   }
 
   egress {
@@ -223,12 +206,13 @@ data "aws_ami" "use1_ubuntu" {
 # us-east-1 — EC2 Instances
 ############################
 
-# Public instance — t3.xlarge for Ubuntu Desktop
+# Public instances — two, one per AZ
 resource "aws_instance" "use1_public" {
+  count                       = 2
   provider                    = aws.use1
   ami                         = data.aws_ami.use1_ubuntu.id
-  instance_type               = "t3.xlarge"
-  subnet_id                   = aws_subnet.use1_public[0].id
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.use1_public[count.index].id
   vpc_security_group_ids      = [aws_security_group.use1_public.id]
   associate_public_ip_address = true
   key_name                    = aws_key_pair.use1.key_name
@@ -236,26 +220,27 @@ resource "aws_instance" "use1_public" {
   user_data_replace_on_change = true
 
   root_block_device {
-    volume_size = 30
+    volume_size = 20
     volume_type = "gp3"
   }
 
   tags = {
-    Name        = "${var.project_name}-public-use1"
+    Name        = "${var.project_name}-public-use1-${count.index}"
     Tier        = "public"
     Project     = var.project_name
     Environment = "dev"
   }
 }
 
-# Private instance — SSM access, no public IP
+# Private instances — two, one per AZ, SSM access only
 resource "aws_instance" "use1_private" {
-  provider               = aws.use1
-  ami                    = data.aws_ami.use1_ubuntu.id
-  instance_type          = "t3.micro"
-  subnet_id              = aws_subnet.use1_private[0].id
-  vpc_security_group_ids = [aws_security_group.use1_private.id]
-  iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
+  count                       = 2
+  provider                    = aws.use1
+  ami                         = data.aws_ami.use1_ubuntu.id
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.use1_private[count.index].id
+  vpc_security_group_ids      = [aws_security_group.use1_private.id]
+  iam_instance_profile        = aws_iam_instance_profile.ssm_profile.name
   associate_public_ip_address = false
 
   root_block_device {
@@ -264,7 +249,7 @@ resource "aws_instance" "use1_private" {
   }
 
   tags = {
-    Name        = "${var.project_name}-private-use1"
+    Name        = "${var.project_name}-private-use1-${count.index}"
     Tier        = "private"
     Project     = var.project_name
     Environment = "dev"

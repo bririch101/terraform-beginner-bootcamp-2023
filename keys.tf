@@ -13,11 +13,6 @@ resource "aws_key_pair" "use1" {
   public_key = tls_private_key.ssh.public_key_openssh
 }
 
-resource "aws_key_pair" "usw1" {
-  provider   = aws.usw1
-  key_name   = "${var.project_name}-key-usw1"
-  public_key = tls_private_key.ssh.public_key_openssh
-}
 
 ############################
 # IAM — SSM role for private instances (global, used in both regions)
